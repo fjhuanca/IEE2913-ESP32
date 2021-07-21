@@ -35,7 +35,7 @@
 #define DISP_TCOLOR TFT_CYAN
 
 // Number length, buffer for storing it and character index
-#define NUM_LEN 12
+#define NUM_LEN 5
 
 // We have a status line for messages
 #define STATUS_X 240 // Centred on this
@@ -98,6 +98,13 @@ struct KeyPadData{
 };
 
 struct MenuData{
+    uint8_t* selection;
+    TFT_eSPI_Button* key;
+    char** keyLabel;
+    uint16_t* keyColor;
+};
+
+struct MenuRegData{
     uint8_t* selection;
     TFT_eSPI_Button* key;
     char** keyLabel;
