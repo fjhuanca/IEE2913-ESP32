@@ -15,6 +15,17 @@
 #include "FifoCamera.h"
 #include "I2C.h"
 #include "ov7670_functions.h"
+#include "wifi_data.h"
+#include <WiFi.h>
+#include "defines.h"
+#include <WebSockets2_Generic.h>
+
+using namespace websockets2_generic;
+
+WebsocketsClient vital_signs_client;
+WebsocketsClient ecg_client;
+
+
 
 TFT_eSPI tft = TFT_eSPI(); // Invoke custom library
 
@@ -30,7 +41,7 @@ uint16_t keypadColor[15] = {TFT_RED, TFT_DARKGREY, TFT_DARKGREEN,
 // Invoke the TFT_eSPI button class and create all the button objects
 TFT_eSPI_Button keypadkey[15];
 
-char* menuLabel[15][12] = {"WiFi Config", "Nota Voz", "Comenzar", "T. Pupila", "Test5", "Test6"};
+char* menuLabel[15][13] = {"WiFi Config", "Nota Voz", "Monitoreo", "T. Pupila", "Test5", "Test6"};
 uint16_t menuColor[15] = {TFT_RED, TFT_DARKGREY, TFT_DARKGREEN,
                          TFT_BLUE, TFT_BLUE, TFT_BLUE,
                          TFT_BLUE, TFT_BLUE, TFT_BLUE,
@@ -38,8 +49,7 @@ uint16_t menuColor[15] = {TFT_RED, TFT_DARKGREY, TFT_DARKGREEN,
                          TFT_BLUE, TFT_BLUE, TFT_BLUE
                         };
 TFT_eSPI_Button menukey[15];
-const char* ssid = "yourNetworkName";
-const char* password =  "yourNetworkPass";
+
 //------------------------------------------------------------------------------------------
 
 unsigned char frame[frameSize];
@@ -50,7 +60,6 @@ FifoCamera<I2C<SIOD, SIOC>, RRST, WRST, RCK, WR, D0, D1, D2, D3, D4, D5, D6, D7>
 
 //------------------------------------------------------------------------------
 void setup() {
-  
   KeyPadData kpd;
   kpd.key = keypadkey;
   kpd.keyLabel = *keypadLabel;
@@ -72,19 +81,24 @@ void setup() {
 
   // Calibrate the touch screen and retrieve the scaling factors
   touch_calibrate(&tft);
-  
   // Clear the screen
-  tft.fillScreen(TFT_BLACK);
+  tft.fillScreen(TFT_WHITE);
 
   // Draw keypad
   // drawKeypad(&tft, &kpd);
   drawMenu(&tft, &md);
+
 }
 
 //------------------------------------------------------------------------------------------
 char numberBuffer[NUM_LEN + 1] = "";
 uint8_t numberIndex = 0;
-uint8_t selection = 0;
+uint8_t selection = -1;
+bool redraw_menu = false;
+
+bool connected = false;
+bool cn1 = false;
+bool cn2 = false;
 
 void loop(void) {
   MenuData md;
@@ -92,7 +106,15 @@ void loop(void) {
   md.key = menukey;
   md.keyLabel = *menuLabel;
   md.keyColor = menuColor;
+  if (redraw_menu){
+    // Clear the screen
+    tft.fillScreen(TFT_WHITE);
 
+    // Draw keypad
+    // drawKeypad(&tft, &kpd);
+    drawMenu(&tft, &md);
+    redraw_menu = false;
+  }
   // KeyPadData kpd;
   // kpd.numberBuffer = numberBuffer;
   // kpd.numberIndex = &numberIndex;
@@ -106,13 +128,44 @@ void loop(void) {
   // // / Check if any key coordinate boxes contain the touch coordinates
   // update_keypad(&tft, &kpd, &t_x, &t_y, &pressed);
   update_menu(&tft, &md, &t_x, &t_y, &pressed);
-  if (selection == 2){
+  if (selection==0){
+    tft.fillScreen(TFT_WHITE);
+    tft.setTextSize(0.6);
+    // WiFi.mode(WIFI_STA);
+    delay(200);
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) {
+      delay(500);
+      status("Conectando", &tft);
+      delay(10);
+      status("Conectando.", &tft);
+      delay(10);
+      status("Conectando..", &tft);
+      delay(10);
+      status("Conectando...", &tft);
+    }
+    status("WiFi Conectado", &tft);
+    status("", &tft);
+    status(IpAddress2String(WiFi.localIP()).c_str(), &tft);
+    delay(1000);
+    status("Conectando Servidor...", &tft);
+    cn1 = vital_signs_client.connect("wss://iee2913-g10-project.southcentralus.cloudapp.azure.com/wss/receiver/signs/");
+    cn2 = ecg_client.connect("wss://iee2913-g10-project.southcentralus.cloudapp.azure.com/wss/receiver/ecg/");
+    tft.fillScreen(TFT_WHITE);
+    if (cn1 && cn2){
+      status("Servidor Conectado", &tft);
+      delay(1000);
+      selection = -1;
+      redraw_menu = true;
+    }    
+  }
+  else if (selection == 4){
     double ox = -999, oy = -999; // Force them to be off screen
     boolean display1 = true;
     boolean update1 = true;
     double x, y;
 
-    tft.fillScreen(TFT_BLACK);
+    tft.fillScreen(TFT_WHITE);
     tft.setTextSize(0.6);
     Graph(tft, x, y, 1, 60, 290, 390, 260, 0, 6.5, 1, -1, 1, .25, "", "", "", display1, YELLOW);
     for (x = 0; x <= 6.3; x += .1) {
@@ -139,7 +192,7 @@ void loop(void) {
       pinMode(VSYNC, INPUT);
       //Serial.println("start");
       tft.init();
-      tft.fillScreen(TFT_BLACK);
+      tft.fillScreen(TFT_WHITE);
     while (true){
       
       while(!digitalRead(VSYNC));
@@ -158,11 +211,33 @@ void loop(void) {
     }
   }
 
-  
+  else if (selection == 2 && cn1 && cn2){
+    
+    tft.fillScreen(TFT_WHITE);
+    while(true){
+      int random1 = random(0, 10);
+      char vital_data[60];
+      sprintf(vital_data, "{\"temp\": %d, \"bf\": %d, \"spo\": %d, \"bpm\": %d}", random1, random1, random1, random1);
+      char ecg_data[60];
+      sprintf(ecg_data, "{\"value\": %d}", random1);
+
+      vital_signs_client.send(vital_data);
+      ecg_client.send(ecg_data); 
+      delay(50);
+    }
+  }
+
 }
 
-//------------------------------------------------------------------------------------------
 
+//------------------------------------------------------------------------------------------
+String IpAddress2String(const IPAddress& ipAddress)
+{
+    return String(ipAddress[0]) + String(".") +
+           String(ipAddress[1]) + String(".") +
+           String(ipAddress[2]) + String(".") +
+           String(ipAddress[3]);
+}
 
 // void displayRGB565()
 // {

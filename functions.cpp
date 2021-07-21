@@ -3,12 +3,12 @@
 #include <string.h>
 
 void status(const char *msg, TFT_eSPI *tft) {
-  tft->setTextPadding(240);
+  tft->setTextPadding(340);
   //tft->setCursor(STATUS_X, STATUS_Y);
   tft->setTextColor(TFT_WHITE, TFT_DARKGREY);
   tft->setTextFont(0);
   tft->setTextDatum(TC_DATUM);
-  tft->setTextSize(5);
+  tft->setTextSize(3);
   tft->drawString(msg, STATUS_X, STATUS_Y);
 }
 
