@@ -2,6 +2,7 @@
 
 #include "constants.h"
 #include <TFT_eSPI.h>
+#include "BMP.h"
 
 
 
@@ -49,6 +50,5 @@ const int YRES = 60;
 
 const int BYTES_PER_PIXEL = 2;
 const int frameSize = XRES * YRES * BYTES_PER_PIXEL;
-
-void displayRGB565(TFT_eSPI tft, unsigned char (*framep)[frameSize]);
+// void displayRGB565(TFT_eSPI tft, unsigned char (*framep)[frameSize]);
 

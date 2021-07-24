@@ -111,6 +111,13 @@ struct MenuRegData{
     uint16_t* keyColor;
 };
 
+struct ExitMenuData{
+    uint8_t* selection;
+    TFT_eSPI_Button* key;
+    char** keyLabel;
+    uint16_t* keyColor;
+};
+
 
 
 //------------------------------------------------------------------------------

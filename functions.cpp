@@ -5,7 +5,7 @@
 void status(const char *msg, TFT_eSPI *tft) {
   tft->setTextPadding(340);
   //tft->setCursor(STATUS_X, STATUS_Y);
-  tft->setTextColor(TFT_WHITE, TFT_DARKGREY);
+  tft->setTextColor(TFT_WHITE, TFT_BLUE);
   tft->setTextFont(0);
   tft->setTextDatum(TC_DATUM);
   tft->setTextSize(3);
@@ -248,5 +248,45 @@ void update_regmenu(TFT_eSPI *tft, MenuRegData *md, uint16_t *t_x, uint16_t *t_y
       *(md->selection) = b;
       delay(10); // UI debouncing
     }
+  }
+}
+
+
+void drawExitMenu(TFT_eSPI *tft, ExitMenuData *md){
+  // Draw keypad background
+  tft->fillRect(0, 0, 480, 320, TFT_DARKGREY);
+
+  // Draw number display area and frame
+  tft->fillRect(DISP_X, DISP_Y, DISP_W, DISP_H, TFT_BLACK);
+  tft->drawRect(DISP_X, DISP_Y, DISP_W, DISP_H, TFT_WHITE);
+
+
+  tft->setFreeFont(LABEL2_FONT);
+  uint8_t b = 0;
+
+  md->key[b].initButton(tft, 240 - MKEY_X/2,
+                        MKEY_Y + 4 * (MKEY_H + MKEY_SPACING_Y), // x, y, w, h, outline, fill, text
+                        MKEY_W, MKEY_H, TFT_WHITE, md->keyColor[b], TFT_WHITE,
+                        md->keyLabel[b], MKEY_TEXTSIZE);
+  std::string str(md->keyLabel[b]);
+  md->key[b].drawButton(false, str.c_str());
+  }
+
+void update_exitmenu(TFT_eSPI *tft, ExitMenuData *md, uint16_t *t_x, uint16_t *t_y, bool *pressed){
+  uint8_t b = 0;
+  if (*pressed && md->key[b].contains(*t_x, *t_y)) {
+    md->key[b].press(true);  // tell the button it is pressed
+  } else {
+    md->key[b].press(false);  // tell the button it is NOT pressed
+  }
+
+  tft->setFreeFont(LABEL2_FONT);
+  std::string str(md->keyLabel[b]);
+  if (md->key[b].justReleased()) md->key[b].drawButton(false, str.c_str());     // draw normal
+
+  if (md->key[b].justPressed()) {
+    md->key[b].drawButton(true, str.c_str());  // draw invert
+    *(md->selection) = b;
+    delay(10); // UI debouncing
   }
 }

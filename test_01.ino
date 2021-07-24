@@ -21,7 +21,25 @@
 #include <WebSockets2_Generic.h>
 #include <HTTPClient.h>
 #include <Arduino_JSON.h>
+#include "BMP.h"
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <Wire.h>
+#include "MAX30100_PulseOximeter.h"
 
+//TEMP
+#define ONE_WIRE_BUS 32
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
+
+
+//MAX30100
+#define REPORTING_PERIOD_MS     1000
+PulseOximeter pox;
+uint32_t tsLastReport = 0;
+
+
+unsigned char bmpHeader[BMP::headerSize];
 using namespace websockets2_generic;
 
 WebsocketsClient vital_signs_client;
@@ -55,6 +73,10 @@ uint16_t menuColor[6] = {TFT_RED, TFT_DARKGREY, TFT_DARKGREEN,
                          TFT_BLUE, TFT_BLUE, TFT_BLUE};
 TFT_eSPI_Button menukey[6];
 
+char* exitregLabel[6][20] = {"Terminar"};
+uint16_t exitregColor[6] = {TFT_RED};
+TFT_eSPI_Button exitregkey[6];
+
 //------------------------------------------------------------------------------------------
 
 unsigned char frame[frameSize];
@@ -65,11 +87,14 @@ FifoCamera<I2C<SIOD, SIOC>, RRST, WRST, RCK, WR, D0, D1, D2, D3, D4, D5, D6, D7>
 
 //------------------------------------------------------------------------------
 void setup() {
-
+  BMP::construct16BitHeader(bmpHeader, XRES, YRES);
+  pinMode(35, OUTPUT);
   MenuData md;
   md.key = menukey;
   md.keyLabel = *menuLabel;
   md.keyColor = menuColor;
+  pinMode(23, INPUT); // Setup for leads off detection LO 
+  pinMode(36, INPUT); // Setup for leads off detection AD8232 
 
   // Use serial port
   Serial.begin(9600);
@@ -96,6 +121,7 @@ char numberBuffer[NUM_LEN + 1] = "";
 uint8_t numberIndex = 0;
 uint8_t selection = -1;
 uint8_t menureg_selection = -1;
+uint8_t exit_selection = -1;
 bool redraw_menu = false;
 
 bool connected = false;
@@ -109,6 +135,11 @@ void loop(void) {
   md.key = menukey;
   md.keyLabel = *menuLabel;
   md.keyColor = menuColor;
+  ExitMenuData expd;
+  expd.selection = &exit_selection;
+  expd.key = exitregkey;
+  expd.keyLabel = *exitregLabel;
+  expd.keyColor = exitregColor;
   if (redraw_menu){
     // Clear the screen
     tft.fillScreen(TFT_WHITE);
@@ -131,141 +162,173 @@ void loop(void) {
   // update_keypad(&tft, &kpd, &t_x, &t_y, &pressed);
   update_menu(&tft, &md, &t_x, &t_y, &pressed);
   
-  if (selection==0){
-    tft.fillScreen(TFT_WHITE);
-    tft.setTextSize(0.6);
-    // WiFi.mode(WIFI_STA);
-    delay(200);
-    WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED) {
-      delay(500);
-      status("Conectando", &tft);
-      delay(10);
-      status("Conectando.", &tft);
-      delay(10);
-      status("Conectando..", &tft);
-      delay(10);
-      status("Conectando...", &tft);
-    }
-    status("WiFi Conectado", &tft);
-    status("", &tft);
-    status(IpAddress2String(WiFi.localIP()).c_str(), &tft);
-    delay(1000);
-    status("Conectando Servidor...", &tft);
-    cn1 = vital_signs_client.connect("wss://iee2913-g10-project.southcentralus.cloudapp.azure.com/wss/receiver/signs/");
-    cn2 = ecg_client.connect("wss://iee2913-g10-project.southcentralus.cloudapp.azure.com/wss/receiver/ecg/");
-    tft.fillScreen(TFT_WHITE);
-    if (cn1 && cn2){
-      status("Servidor Conectado", &tft);
+  if (selection==0 ){
+    if (!(cn1 && cn2) || true){
+      tft.fillScreen(TFT_WHITE);
+      tft.setTextSize(0.6);
+      // WiFi.mode(WIFI_STA);
+      delay(200);
+      WiFi.begin(ssid, password);
+      while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        status("Conectando", &tft);
+        delay(10);
+        status("Conectando.", &tft);
+        delay(10);
+        status("Conectando..", &tft);
+        delay(10);
+        status("Conectando...", &tft);
+      }
+      status("WiFi Conectado", &tft);
+      status("", &tft);
+      status(IpAddress2String(WiFi.localIP()).c_str(), &tft);
       delay(1000);
-      selection = -1;
-      redraw_menu = true;
-    }    
-  }
-  else if (selection == 40){
-    double ox = -999, oy = -999; // Force them to be off screen
-    boolean display1 = true;
-    boolean update1 = true;
-    double x, y;
-
-    tft.fillScreen(TFT_WHITE);
-    tft.setTextSize(0.6);
-    Graph(tft, x, y, 1, 60, 290, 390, 260, 0, 6.5, 1, -1, 1, .25, "", "", "", display1, YELLOW);
-    for (x = 0; x <= 6.3; x += .1) {
-      y = sin(x);
-      Trace(tft, x, y, 1, 60, 290, 390, 260, 0, 6.5, 1, -1, 1, .25, "Sin(x)", "x", "fn(x)", update1, YELLOW, &ox, &oy);
-      delay(50);
-    }
-  }
-  else if (selection == 3){
-      cn3 = cam_client.connect("wss://iee2913-g10-project.southcentralus.cloudapp.azure.com/wss/receiver/cam/");
+      status("Conectando Servidor...", &tft);
+      cn1 = vital_signs_client.connect("wss://iee2913-g10-project.southcentralus.cloudapp.azure.com/wss/receiver/signs/");
+      cn2 = ecg_client.connect("wss://iee2913-g10-project.southcentralus.cloudapp.azure.com/wss/receiver/ecg/");
+      tft.fillScreen(TFT_WHITE);
       if (cn1 && cn2){
-        status("Camara Conectada", &tft);
+        status("Servidor Conectado", &tft);
         delay(1000);
         selection = -1;
         redraw_menu = true;
       }
-      tft.fillScreen(TFT_WHITE);
-      i2c.init();
-      camera.init();
-      
-      #ifdef QQVGA
-        camera.QQVGARGB565();
-      #endif
-      #ifdef QQQVGA
-        camera.QQQVGARGB565();
-      #endif
-      
-      //camera.QQVGAYUV();
-      //camera.RGBRaw();
-      //camera.testImage();
-      
-      pinMode(VSYNC, INPUT);
-      //Serial.println("start");
-      tft.init();
-      tft.fillScreen(TFT_WHITE);
-    while (true){
-      // cam_client.send(frame);
-      while(!digitalRead(VSYNC));
-      while(digitalRead(VSYNC));
-      camera.prepareCapture();
-      camera.startCapture();
-      while(!digitalRead(VSYNC));
-      camera.stopCapture();
-      
-      //color
-      
-      while(digitalRead(VSYNC));
-      camera.readFrame(frame, XRES, YRES, BYTES_PER_PIXEL);
-      displayRGB565(tft, &frame);
-      // cam_client.send(reinterpret_cast<const char*>(frame));
-      status("Sent", &tft);
-      delay(1000);
-      tft.fillScreen(TFT_WHITE);
-
     }
+    else{
+      status("Ya Conectado", &tft);
+    }    
+  }
+  // else if (selection == 40){
+  //   double ox = -999, oy = -999; // Force them to be off screen
+  //   boolean display1 = true;
+  //   boolean update1 = true;
+  //   double x, y;
+
+  //   tft.fillScreen(TFT_WHITE);
+  //   tft.setTextSize(0.6);
+  //   Graph(tft, x, y, 1, 60, 290, 390, 260, 0, 6.5, 1, -1, 1, .25, "", "", "", display1, YELLOW);
+  //   for (x = 0; x <= 6.3; x += .1) {
+  //     y = sin(x);
+  //     Trace(tft, x, y, 1, 60, 290, 390, 260, 0, 6.5, 1, -1, 1, .25, "Sin(x)", "x", "fn(x)", update1, YELLOW, &ox, &oy);
+  //     delay(50);
+  //   }
+  // }
+  else if (selection == 3){
+      
+      // i2c.init();
+      // camera.init();
+      // camera.QQVGARGB565();
+      // cn3 = cam_client.connect("wss://iee2913-g10-project.southcentralus.cloudapp.azure.com/wss/receiver/cam/");
+      // if (cn3){
+      //   status("Camara Conectada", &tft);
+      //   delay(1000);
+      //   selection = -1;
+      //   redraw_menu = true;
+      // }
+      tft.fillScreen(TFT_WHITE);
+      drawExitMenu(&tft, &expd);
+      while (exit_selection != 0){        
+        pressed = tft.getTouch(&t_x, &t_y);
+        digitalWrite(35, 1);        
+        update_exitmenu(&tft, &expd, &t_x, &t_y, &pressed);
+        // readFrame();
+        // displayRGB565(frame, XRES, YRES);
+        // char fram2send[BMP::headerSize];
+        // sprintf(fram2send, "%s", frame);
+        // cam_client.send(fram2send);
+      }
+        menureg_selection = -1;
+        exit_selection = -1;
+        selection = -1;
+        redraw_menu = true;
+        digitalWrite(35, 0);
   }
 
   else if (selection == 2 && cn1 && cn2){
     
+    sensors.begin();
+    pox.begin();
     tft.fillScreen(TFT_WHITE);
-    while(true){
-      int random1 = random(0, 10);
-      char vital_data[100];
-      sprintf(vital_data, "{\"temp\": %d, \"bf\": %d, \"spo\": %d, \"bpm\": %d}", random1, random1, random1, random1);
-      char ecg_data[60];
-      sprintf(ecg_data, "{\"value\": %d}", random1);
-
-      vital_signs_client.send(vital_data);
-      ecg_client.send(ecg_data); 
-      delay(50);
+    long last_millis_1 = millis();
+    long last_millis_2 = last_millis_1;
+    long last_millis_3 = last_millis_1;
+    float tempC = 0;
+    int spo2 = 0;
+    int hr = 0;
+    drawExitMenu(&tft, &expd);
+    status("Monitoreando", &tft);
+    while(exit_selection !=0 ){
+      pressed = tft.getTouch(&t_x, &t_y);
+      update_exitmenu(&tft, &expd, &t_x, &t_y, &pressed);
+      pox.update();
+      if (millis() - last_millis_1 >= 10000){
+        spo2 = pox.getSpO2();
+        hr = pox.getHeartRate();
+        sensors.requestTemperatures();
+        tempC = (int)(sensors.getTempCByIndex(0) * 10) / 10.0;
+        char vital_data[100];
+        int bf = random(0, 20);
+        sprintf(vital_data, "{\"temp\": %f, \"bf\": %d, \"spo\": %d, \"bpm\": %d}", tempC, bf, spo2, hr);
+        vital_signs_client.send(vital_data);
+        last_millis_1 = millis();
+      }
+      // if (millis() - last_millis_3 >= 10000){
+      //   spo2 = 98;
+      //   hr = 75;
+      //   sensors.requestTemperatures();
+      //   tempC = (int)(sensors.getTempCByIndex(0) * 10) / 10.0;
+      //   char vital_data[100];
+      //   sprintf(vital_data, "{\"temp\": %f, \"bf\": %d, \"spo\": %d, \"bpm\": %d}", tempC, 0, spo2, hr);
+      //   vital_signs_client.send(vital_data);
+      //   last_millis_3 = millis();
+      // }
+      if (millis() - last_millis_2 >= 40 ){
+        uint16_t ecg_read = analogRead(36);
+        char ecg_data[60];
+        sprintf(ecg_data, "{\"value\": %d}", ecg_read);
+        ecg_client.send(ecg_data); 
+        last_millis_2 = millis();
+      }
     }
+  menureg_selection = -1;
+  exit_selection = -1;
+  selection = -1;
+  redraw_menu = true;
   }
 
   else if (selection == 4){
     HTTPClient msjs_client;
     tft.fillScreen(TFT_WHITE);
-    status("Recolectando Msjes.", &tft);
+    status("Recolectando Mensajes", &tft);
     msjs_client.begin("https://iee2913-g10-project.southcentralus.cloudapp.azure.com/comm/messages/");
     int httpCode = msjs_client.GET();
+    drawExitMenu(&tft, &expd);
     if (httpCode >= 200){
       String payload = msjs_client.getString();
-      tft.fillScreen(TFT_WHITE);
       JSONVar myObject = JSON.parse(payload);
       JSONVar keys = myObject.keys();
       int n = myObject["n"];
-      status("Ultimos 10 mensajes:", &tft);
+      status("Ultimos 8 mensajes:", &tft);
 
       int msj_x = STATUS_X;
       int msj_y = STATUS_Y + 20;
-      for (int i = n; i>n-10 ; i--) {
+      for (int i = n; i>n-8 ; i--) {
         JSONVar value = myObject[keys[i]];
         const char* msj = (const char*) value;
         write_message(msj, &tft, msj_x, msj_y);
         msj_y = msj_y + 20;
+        delay(1000);
       }
     }
-    delay(1000);
+    exit_selection = -1;
+    while (exit_selection != 0){
+      pressed = tft.getTouch(&t_x, &t_y);
+      update_exitmenu(&tft, &expd, &t_x, &t_y, &pressed);
+    }
+    menureg_selection = -1;
+    exit_selection = -1;
+    selection = -1;
+    redraw_menu = true;
   }
   else if (selection == 5){
     HTTPClient register_client;
@@ -312,7 +375,7 @@ void loop(void) {
         JSONVar myObject = JSON.parse(payload);
         JSONVar value = myObject["success"];
         const char* rsp = (const char*) value;
-        status("asdasd", &tft);
+        status("Enviado", &tft);
         delay(1000);
         menureg_selection = -1;
         if (strcmp(rsp, "false") == 0){
@@ -408,3 +471,27 @@ String IpAddress2String(const IPAddress& ipAddress)
 //   }     
   
 // }
+
+void displayRGB565(unsigned char * frame, int xres, int yres)
+{
+  tft.setAddrWindow(0, 0, yres - 1, xres - 1);
+  int i = 0;
+  for(int x = 0; x < xres; x++)
+    for(int y = 0; y < yres; y++)
+    {
+      i = (y * xres + x) << 1;
+      tft.pushColor(frame[i] | (frame[i + 1] << 8));
+      //tft.pushColor(((frame[i] | (frame[i + 1] << 8)) >> 1) & 0b111101111101111); //dimming to test for tft error
+    }  
+}
+
+void readFrame()
+{
+  while(!digitalRead(VSYNC));
+  while(digitalRead(VSYNC));
+  camera.stopCapture();
+  camera.prepareCapture();
+  while(!digitalRead(VSYNC));
+  camera.startCapture();
+  camera.readFrame(frame, XRES, YRES, BYTES_PER_PIXEL);
+}

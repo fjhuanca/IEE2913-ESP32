@@ -19,3 +19,7 @@ void keypad_status(const char *msg, TFT_eSPI *tft);
 
 void drawRegMenu(TFT_eSPI *tft, MenuRegData *md);
 void update_regmenu(TFT_eSPI *tft, MenuRegData *md, uint16_t *t_x, uint16_t *t_y, bool *pressed);
+
+
+void drawExitMenu(TFT_eSPI *tft, ExitMenuData *md);
+void update_exitmenu(TFT_eSPI *tft, ExitMenuData *md, uint16_t *t_x, uint16_t *t_y, bool *pressed);
