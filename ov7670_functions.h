@@ -25,9 +25,9 @@ const int WR = 0;     //write flag
 const int D0 = 13;
 const int D1 = 12;
 const int D2 = 14;
-const int D3 = 27;
-const int D4 = 26;
-const int D5 = 25;
+const int D3 = 3;  // cambiado, antes: 27
+const int D4 = 1;  // cambiado, antes: 26
+const int D5 = 35;
 const int D6 = 34;
 const int D7 = 39;
 

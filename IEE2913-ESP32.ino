@@ -18,20 +18,49 @@
 #include "wifi_data.h"
 #include <WiFi.h>
 #include "defines.h"
-#include <WebSockets2_Generic.h>
+// #include <WebSockets2_Generic.h>
 #include <HTTPClient.h>
+#include <WiFiClient.h>
 #include <Arduino_JSON.h>
 #include "BMP.h"
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <Wire.h>
 #include "MAX30100_PulseOximeter.h"
+#include "wav.h"
+#include "driver/i2s.h"
+#include "i2s_handler.h"
+
+#include <WebSocketsClient.h>
+char servername[] = "iee2913-g10-project.southcentralus.cloudapp.azure.com";
+String url_cam = "/wss/receiver/cam/";
+String url_signs = "/wss/receiver/signs/";
+String url_ecg = "/wss/receiver/ecg/";
+String url_info_in = "/wss/sender/info/";
+String url_messages = "/comm/messages/";
+String url_drugs = "/comm/drugs_record/";
+String url_evacuation = "/comm/evacuation_record/";
+String url_food = "/comm/food_record/";
+String url_audio = "/comm/voice_note/";
+WebSocketsClient webSocket_signs;
+WebSocketsClient webSocket_ecg;
+WebSocketsClient webSocket_info_in;
+#define TIMEOUT 5000
+#define LED_PIN 25
+int camera_on = false;
+
+
+WiFiClient audio_client;
+const char filename[] = "/temp.wav";
+bool recorded = false;
+File file;
+
 
 //TEMP
 #define ONE_WIRE_BUS 32
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
-
+float tempC = 0;
 
 //MAX30100
 #define REPORTING_PERIOD_MS     1000
@@ -40,23 +69,23 @@ uint32_t tsLastReport = 0;
 
 
 unsigned char bmpHeader[BMP::headerSize];
-using namespace websockets2_generic;
+// using namespace websockets2_generic;
 
-WebsocketsClient vital_signs_client;
-WebsocketsClient ecg_client;
-WebsocketsClient cam_client;
+// WebsocketsClient vital_signs_client;
+// WebsocketsClient ecg_client;
+// WebsocketsClient cam_client;
 
 
 
 TFT_eSPI tft = TFT_eSPI(); // Invoke custom library
 
 // Create 15 keys for the keypad
-char* keypadLabel[15][5] = {"New", "Del", "", "1", "2", "3", "4", "5", "6", "7", "8", "9", "", "0", ":" };
+char* keypadLabel[15][5] = {"New", "Del", "", "1", "2", "3", "4", "5", "6", "7", "8", "9", "", "0", "" };
 uint16_t keypadColor[15] = {TFT_RED, TFT_DARKGREEN, TFT_BLACK,
                          TFT_BLUE, TFT_BLUE, TFT_BLUE,
                          TFT_BLUE, TFT_BLUE, TFT_BLUE,
                          TFT_BLUE, TFT_BLUE, TFT_BLUE,
-                         TFT_BLACK, TFT_BLUE, TFT_BLUE
+                         TFT_BLACK, TFT_BLUE, TFT_BLACK
                         };
 
 
@@ -86,9 +115,10 @@ FifoCamera<I2C<SIOD, SIOC>, RRST, WRST, RCK, WR, D0, D1, D2, D3, D4, D5, D6, D7>
 
 
 //------------------------------------------------------------------------------
+#define RXD2 16
+#define TXD2 17
 void setup() {
-  BMP::construct16BitHeader(bmpHeader, XRES, YRES);
-  pinMode(35, OUTPUT);
+  pinMode(LED_PIN, OUTPUT);
   MenuData md;
   md.key = menukey;
   md.keyLabel = *menuLabel;
@@ -97,7 +127,7 @@ void setup() {
   pinMode(36, INPUT); // Setup for leads off detection AD8232 
 
   // Use serial port
-  Serial.begin(9600);
+  Serial.begin(115200,SERIAL_8N1,RXD2,TXD2);
 
   // Initialise the TFT screen
   tft.init();
@@ -130,6 +160,9 @@ bool cn2 = false;
 bool cn3 = false;
 
 void loop(void) {
+  webSocket_signs.loop();
+  webSocket_ecg.loop();
+  webSocket_info_in.loop();
   MenuData md;
   md.selection = &selection;
   md.key = menukey;
@@ -163,7 +196,7 @@ void loop(void) {
   update_menu(&tft, &md, &t_x, &t_y, &pressed);
   
   if (selection==0 ){
-    if (!(cn1 && cn2) || true){
+    if (WiFi.status() != WL_CONNECTED){
       tft.fillScreen(TFT_WHITE);
       tft.setTextSize(0.6);
       // WiFi.mode(WIFI_STA);
@@ -183,37 +216,28 @@ void loop(void) {
       status("", &tft);
       status(IpAddress2String(WiFi.localIP()).c_str(), &tft);
       delay(1000);
-      status("Conectando Servidor...", &tft);
-      cn1 = vital_signs_client.connect("wss://iee2913-g10-project.southcentralus.cloudapp.azure.com/wss/receiver/signs/");
-      cn2 = ecg_client.connect("wss://iee2913-g10-project.southcentralus.cloudapp.azure.com/wss/receiver/ecg/");
+      webSocket_info_in.begin(servername, 8000, url_info_in);
+      webSocket_info_in.onEvent(webSocket_info_in_event);
+      webSocket_info_in.setReconnectInterval(5000);
+      delay(1000);
       tft.fillScreen(TFT_WHITE);
-      if (cn1 && cn2){
-        status("Servidor Conectado", &tft);
-        delay(1000);
-        selection = -1;
-        redraw_menu = true;
+      while (!webSocket_info_in.isConnected()){
+        status("Conectando Servidor...", &tft);
+        webSocket_info_in.loop();
       }
     }
     else{
       status("Ya Conectado", &tft);
-    }    
+      delay(1000);
+    }
+    selection = -1;
+    redraw_menu = true;
   }
-  // else if (selection == 40){
-  //   double ox = -999, oy = -999; // Force them to be off screen
-  //   boolean display1 = true;
-  //   boolean update1 = true;
-  //   double x, y;
 
-  //   tft.fillScreen(TFT_WHITE);
-  //   tft.setTextSize(0.6);
-  //   Graph(tft, x, y, 1, 60, 290, 390, 260, 0, 6.5, 1, -1, 1, .25, "", "", "", display1, YELLOW);
-  //   for (x = 0; x <= 6.3; x += .1) {
-  //     y = sin(x);
-  //     Trace(tft, x, y, 1, 60, 290, 390, 260, 0, 6.5, 1, -1, 1, .25, "Sin(x)", "x", "fn(x)", update1, YELLOW, &ox, &oy);
-  //     delay(50);
-  //   }
-  // }
   else if (selection == 3){
+    WebSocketsClient webSocket_cam;
+    webSocket_cam.begin(servername, 8000, url_cam);
+    webSocket_cam.setReconnectInterval(5000);
       
       // i2c.init();
       // camera.init();
@@ -227,9 +251,11 @@ void loop(void) {
       // }
       tft.fillScreen(TFT_WHITE);
       drawExitMenu(&tft, &expd);
-      while (exit_selection != 0){        
+      camera_on = true;
+      while (exit_selection != 0){     
+        webSocket_info_in.loop();   
         pressed = tft.getTouch(&t_x, &t_y);
-        digitalWrite(35, 1);        
+        // digitalWrite(LED_PIN, 1);        
         update_exitmenu(&tft, &expd, &t_x, &t_y, &pressed);
         // readFrame();
         // displayRGB565(frame, XRES, YRES);
@@ -237,59 +263,95 @@ void loop(void) {
         // sprintf(fram2send, "%s", frame);
         // cam_client.send(fram2send);
       }
+        camera_on = false;
         menureg_selection = -1;
         exit_selection = -1;
         selection = -1;
         redraw_menu = true;
-        digitalWrite(35, 0);
+        // digitalWrite(LED_PIN, 0);
   }
 
-  else if (selection == 2 && cn1 && cn2){
-    
-    sensors.begin();
-    pox.begin();
+  else if (selection == 2 && WiFi.status() == WL_CONNECTED){
+    webSocket_signs.begin(servername, 8000, url_signs);
+    webSocket_signs.setReconnectInterval(5000);
+    webSocket_ecg.begin(servername, 8000, url_ecg);
+    webSocket_ecg.setReconnectInterval(5000);
+    long t = millis();
+    webSocket_signs.loop();
+    webSocket_ecg.loop();
+    while (!cn1 || !cn2 || millis() - t > TIMEOUT){
+      webSocket_signs.loop();
+      webSocket_ecg.loop();
+      cn1 = webSocket_signs.isConnected();
+      cn2 = webSocket_ecg.isConnected();
+      status("Conectando Servidor...", &tft);
+      t = millis();
+    }
+
+    delay(1000);
+    cn1 = webSocket_signs.isConnected();
+    cn2 = webSocket_ecg.isConnected();
     tft.fillScreen(TFT_WHITE);
-    long last_millis_1 = millis();
-    long last_millis_2 = last_millis_1;
-    long last_millis_3 = last_millis_1;
-    float tempC = 0;
-    int spo2 = 0;
-    int hr = 0;
-    drawExitMenu(&tft, &expd);
-    status("Monitoreando", &tft);
-    while(exit_selection !=0 ){
-      pressed = tft.getTouch(&t_x, &t_y);
-      update_exitmenu(&tft, &expd, &t_x, &t_y, &pressed);
-      pox.update();
-      if (millis() - last_millis_1 >= 10000){
-        spo2 = pox.getSpO2();
-        hr = pox.getHeartRate();
-        sensors.requestTemperatures();
-        tempC = (int)(sensors.getTempCByIndex(0) * 10) / 10.0;
-        char vital_data[100];
-        int bf = random(0, 20);
-        sprintf(vital_data, "{\"temp\": %f, \"bf\": %d, \"spo\": %d, \"bpm\": %d}", tempC, bf, spo2, hr);
-        vital_signs_client.send(vital_data);
-        last_millis_1 = millis();
-      }
-      // if (millis() - last_millis_3 >= 10000){
-      //   spo2 = 98;
-      //   hr = 75;
-      //   sensors.requestTemperatures();
-      //   tempC = (int)(sensors.getTempCByIndex(0) * 10) / 10.0;
-      //   char vital_data[100];
-      //   sprintf(vital_data, "{\"temp\": %f, \"bf\": %d, \"spo\": %d, \"bpm\": %d}", tempC, 0, spo2, hr);
-      //   vital_signs_client.send(vital_data);
-      //   last_millis_3 = millis();
-      // }
-      if (millis() - last_millis_2 >= 40 ){
-        uint16_t ecg_read = analogRead(36);
-        char ecg_data[60];
-        sprintf(ecg_data, "{\"value\": %d}", ecg_read);
-        ecg_client.send(ecg_data); 
-        last_millis_2 = millis();
+    if (cn1 && cn2){
+      status("Servidor Conectado", &tft);
+      delay(1000);
+    
+    
+      sensors.begin();
+      pox.begin();
+      tft.fillScreen(TFT_WHITE);
+      long last_millis_1 = millis();
+      long last_millis_2 = last_millis_1;
+      long last_millis_3 = last_millis_1;
+      int spo2 = 0;
+      int hr = 0;
+      drawExitMenu(&tft, &expd);
+
+      write_message("Monitoreando", &tft, STATUS_X, 160, 4);
+      while(exit_selection !=0 ){
+        webSocket_info_in.loop();
+        pressed = tft.getTouch(&t_x, &t_y);
+        update_exitmenu(&tft, &expd, &t_x, &t_y, &pressed);
+        pox.update();
+        if (millis() - last_millis_1 >= 1000){
+          // TaskHandle_t xHandle = NULL;
+          xTaskCreate(get_temp, "get_temp", 1024 * 1, NULL, 4, NULL);
+          spo2 = pox.getSpO2();
+          hr = pox.getHeartRate();
+          
+          char vital_data[100];
+          int bf = random(0, 20);
+          sprintf(vital_data, "{\"temp\": %f, \"bf\": %d, \"spo\": %d, \"bpm\": %d}", tempC, bf, spo2, hr);
+          webSocket_signs.sendTXT(vital_data);
+          last_millis_1 = millis();
+        }
+        // if (millis() - last_millis_3 >= 10000){
+        //   spo2 = 98;
+        //   hr = 75;
+        //   sensors.requestTemperatures();
+        //   tempC = (int)(sensors.getTempCByIndex(0) * 10) / 10.0;
+        //   char vital_data[100];
+        //   sprintf(vital_data, "{\"temp\": %f, \"bf\": %d, \"spo\": %d, \"bpm\": %d}", tempC, 0, spo2, hr);
+        //   vital_signs_client.send(vital_data);
+        //   last_millis_3 = millis();
+        // }
+        if (millis() - last_millis_2 >= 2 ){
+          uint16_t ecg_read = analogRead(36);
+          char ecg_data[60];
+          sprintf(ecg_data, "{\"value\": %d}", ecg_read);
+          webSocket_ecg.sendTXT(ecg_data); 
+          last_millis_2 = millis();
+        }
       }
     }
+    else{
+      status("Fallo conexion", &tft);
+      delay(1000);
+    }
+  webSocket_ecg.disconnect();
+  webSocket_signs.disconnect();
+  cn1 = false;
+  cn2 = false;
   menureg_selection = -1;
   exit_selection = -1;
   selection = -1;
@@ -300,7 +362,7 @@ void loop(void) {
     HTTPClient msjs_client;
     tft.fillScreen(TFT_WHITE);
     status("Recolectando Mensajes", &tft);
-    msjs_client.begin("https://iee2913-g10-project.southcentralus.cloudapp.azure.com/comm/messages/");
+    msjs_client.begin("https://" + String(servername) + url_messages);
     int httpCode = msjs_client.GET();
     drawExitMenu(&tft, &expd);
     if (httpCode >= 200){
@@ -308,16 +370,17 @@ void loop(void) {
       JSONVar myObject = JSON.parse(payload);
       JSONVar keys = myObject.keys();
       int n = myObject["n"];
-      status("Ultimos 8 mensajes:", &tft);
+      int n2 = std::min(n, 7);
+      status("Ultimos 7 mensajes:", &tft);
 
       int msj_x = STATUS_X;
-      int msj_y = STATUS_Y + 20;
-      for (int i = n; i>n-8 ; i--) {
-        JSONVar value = myObject[keys[i]];
+      int msj_y = STATUS_Y + 30;
+      for (int i = 0; i<n2 ; i++) {
+        JSONVar value = myObject[keys[n-i-1]];
         const char* msj = (const char*) value;
         write_message(msj, &tft, msj_x, msj_y);
-        msj_y = msj_y + 20;
-        delay(1000);
+        msj_y = msj_y + 30;
+        delay(500);
       }
     }
     exit_selection = -1;
@@ -364,7 +427,7 @@ void loop(void) {
         break;
       }
       else if (menureg_selection == 0){
-        register_client.begin("https://iee2913-g10-project.southcentralus.cloudapp.azure.com/comm/drugs_record/");
+        register_client.begin("https://" + String(servername) + url_drugs);
         register_client.addHeader("Content-Type", "application/json");
         tft.fillScreen(TFT_WHITE);
         char json_content[60];
@@ -389,7 +452,7 @@ void loop(void) {
         }
       }
        else if (menureg_selection == 1){
-        register_client.begin("https://iee2913-g10-project.southcentralus.cloudapp.azure.com/comm/evacuation_record/");
+        register_client.begin("https://" + String(servername) + url_evacuation);
         register_client.addHeader("Content-Type", "application/json");
         tft.fillScreen(TFT_WHITE);
         char json_content[60];
@@ -414,7 +477,7 @@ void loop(void) {
         }
       }
        else if (menureg_selection == 2){
-        register_client.begin("https://iee2913-g10-project.southcentralus.cloudapp.azure.com/comm/food_record/");
+        register_client.begin("https://" + String(servername) + url_food);
         register_client.addHeader("Content-Type", "application/json");
         tft.fillScreen(TFT_WHITE);
         char json_content[60];
@@ -441,13 +504,36 @@ void loop(void) {
       }
     }
   }
+  else if (selection == 1){
+      tft.fillScreen(TFT_WHITE);
+      write_message("Grabando en 3...", &tft, STATUS_X, 160, 4);
+      delay(1000);
+      write_message("Grabando en 2...", &tft, STATUS_X, 160, 4);
+      delay(1000);
+      write_message("Grabando en 1...", &tft, STATUS_X, 160, 4);
+      delay(1000);      
+      write_message("Grabando en 0...", &tft, STATUS_X, 160, 4);
+      delay(1000);
+      SPIFFSInit();
+      i2sInit();
+      // xTaskCreate(i2s_adc, "i2s_adc", 1024 * 2, NULL, 1, NULL);
+      write_message("  Grabando ...  ", &tft, STATUS_X, 160, 4);
+      i2s_adc(NULL);
+      write_message("Listo, enviando ...", &tft, STATUS_X, 160, 4);
+      send_wav();
+      recorded = false;
+      write_message("     Enviado!      ", &tft, STATUS_X, 160, 4);
+      exit_selection = -1;
+      selection = -1;
+      redraw_menu = true;
+
+  }
 
 }
 
 
 //------------------------------------------------------------------------------------------
-String IpAddress2String(const IPAddress& ipAddress)
-{
+String IpAddress2String(const IPAddress& ipAddress){
     return String(ipAddress[0]) + String(".") +
            String(ipAddress[1]) + String(".") +
            String(ipAddress[2]) + String(".") +
@@ -472,8 +558,7 @@ String IpAddress2String(const IPAddress& ipAddress)
   
 // }
 
-void displayRGB565(unsigned char * frame, int xres, int yres)
-{
+void displayRGB565(unsigned char * frame, int xres, int yres){
   tft.setAddrWindow(0, 0, yres - 1, xres - 1);
   int i = 0;
   for(int x = 0; x < xres; x++)
@@ -485,8 +570,7 @@ void displayRGB565(unsigned char * frame, int xres, int yres)
     }  
 }
 
-void readFrame()
-{
+void readFrame(){
   while(!digitalRead(VSYNC));
   while(digitalRead(VSYNC));
   camera.stopCapture();
@@ -494,4 +578,157 @@ void readFrame()
   while(!digitalRead(VSYNC));
   camera.startCapture();
   camera.readFrame(frame, XRES, YRES, BYTES_PER_PIXEL);
+}
+
+void get_temp(void *arg){
+  sensors.requestTemperatures();
+  tempC = (int)(sensors.getTempCByIndex(0) * 10) / 10.0;
+  vTaskDelete(NULL);
+}
+
+void webSocket_info_in_event(WStype_t type, uint8_t * payload, size_t length) {
+  JSONVar myObject;
+  int n;
+  int nm;
+  int sc;
+  switch(type) {
+    case WStype_DISCONNECTED:
+      Serial.printf("[WSc] Disconnected!\n");
+      break;
+    case WStype_CONNECTED:
+      Serial.printf("[WSc] Connected to url: %s\n", payload);
+
+      // send message to server when Connected
+      //webSocket.sendTXT("Connected");
+      break;
+    case WStype_TEXT:
+      Serial.printf("[WSc] get text: %s\n", payload);
+      myObject = JSON.parse(String((char *) payload));
+      n = myObject["led"];
+      nm = myObject["new_message"];
+      sc = myObject["action_request"];
+      Serial.printf("%d\n", n);
+      if (n && camera_on) digitalWrite(LED_PIN, HIGH);
+      else if (!n) digitalWrite(LED_PIN, LOW);
+      if (nm) {
+        status("      Nuevo Mensaje     ", &tft);
+      }
+      if (sc == 1){
+        status(" Dr. solicita monitoreo ", &tft);
+      }
+      else if (sc == 2){
+        status("Dr. solicita test pupila", &tft);
+      }
+
+      // send message to server
+      // webSocket.sendTXT("message here");
+      break;
+    case WStype_BIN:
+      Serial.printf("[WSc] get binary length: %u\n", length);
+      // hexdump(payload, length);
+
+      // send data to server
+      // webSocket.sendBIN(payload, length);
+      break;
+    case WStype_ERROR:      
+    case WStype_FRAGMENT_TEXT_START:
+    case WStype_FRAGMENT_BIN_START:
+    case WStype_FRAGMENT:
+    case WStype_FRAGMENT_FIN:
+      break;
+  }
+}
+
+void SPIFFSInit(){
+  if(!SPIFFS.begin(true)){
+    Serial.println("SPIFFS initialisation failed!");
+    while(1) yield();
+  }
+
+  SPIFFS.remove(filename);
+  file = SPIFFS.open(filename, FILE_WRITE);
+  if(!file){
+    Serial.println("File is not available!");
+  }
+
+  byte header[headerSize];
+  wavHeader(header, FLASH_RECORD_SIZE);
+
+  file.write(header, headerSize);
+  //listSPIFFS();
+}
+
+void i2s_adc(void *arg){
+    
+    int i2s_read_len = I2S_READ_LEN;
+    int flash_wr_size = 0;
+    size_t bytes_read;
+
+    char* i2s_read_buff = (char*) calloc(i2s_read_len, sizeof(char));
+    uint8_t* flash_write_buff = (uint8_t*) calloc(i2s_read_len, sizeof(char));
+
+    i2s_read(I2S_PORT, (void*) i2s_read_buff, i2s_read_len, &bytes_read, portMAX_DELAY);
+    i2s_read(I2S_PORT, (void*) i2s_read_buff, i2s_read_len, &bytes_read, portMAX_DELAY);
+    
+    Serial.println(" *** Recording Start *** ");
+    while (flash_wr_size < FLASH_RECORD_SIZE) {
+        //read data from I2S bus, in this case, from ADC.
+        i2s_read(I2S_PORT, (void*) i2s_read_buff, i2s_read_len, &bytes_read, portMAX_DELAY);
+        //example_disp_buf((uint8_t*) i2s_read_buff, 64);
+        //save original data from I2S(ADC) into flash.
+        i2s_adc_data_scale(flash_write_buff, (uint8_t*)i2s_read_buff, i2s_read_len);
+        //file.write((const byte*) i2s_read_buff, i2s_read_len);
+        file.write((const byte*) flash_write_buff, i2s_read_len);
+        flash_wr_size += i2s_read_len;
+        //ets_printf("Sound recording %u%%\n", flash_wr_size * 100 / FLASH_RECORD_SIZE);
+        //ets_printf("Never Used Stack Size: %u\n", uxTaskGetStackHighWaterMark(NULL));
+    }
+    Serial.println(" *** Recording Stop *** ");
+    file.close();
+
+    free(i2s_read_buff);
+    i2s_read_buff = NULL;
+    free(flash_write_buff);
+    flash_write_buff = NULL;
+    
+    //listSPIFFS();
+    recorded = true;
+    // vTaskDelete(NULL);
+}
+
+
+
+////////////////////////////////////////////////////////////////////////////////////
+
+bool send_wav(){
+   file = SPIFFS.open(filename);
+   if (audio_client.connect(servername, 8000)) {
+      Serial.println("connected");
+      audio_client.print(String("POST ") + url_audio + " HTTP/1.1\r\n" + "Host: " + servername + "\r\n");
+      audio_client.println("User-Agent: ESP32");
+      audio_client.println("Accept-Encoding: gzip, deflate");
+      audio_client.println("Accept: */*");
+      audio_client.println("Connection: keep-alive");
+      audio_client.print("Content-Length: ");
+      audio_client.println(file.size()+142);
+      Serial.println(file.size());
+      audio_client.println("Content-Type: multipart/form-data; boundary=da5bc2523dad070ffab70d9707be5265");
+      audio_client.println("");
+      audio_client.println("--da5bc2523dad070ffab70d9707be5265");
+      audio_client.println("Content-Disposition: form-data; name=\"audio\"; filename=\"temp.wav\"");
+      audio_client.println("");
+      //audio_client.println();
+      //while (file.available()){
+      //      audio_client.write(file.read());
+      //} 
+      audio_client.write(file);
+      Serial.println("");
+      audio_client.println("--da5bc2523dad070ffab70d9707be5265--");
+      Serial.println(">>><<<");
+      if (audio_client.available()){
+        String serverRes = audio_client.readStringUntil('}');
+        Serial.println(serverRes);
+      }
+    }
+  file.close();
 }

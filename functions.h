@@ -14,7 +14,7 @@ void update_keypad(TFT_eSPI *tft, KeyPadData *kpd, uint16_t *t_x, uint16_t *t_y,
 
 void drawMenu(TFT_eSPI *tft, MenuData *md);
 void update_menu(TFT_eSPI *tft, MenuData *md, uint16_t *t_x, uint16_t *t_y, bool *pressed);
-void write_message(const char *msg, TFT_eSPI *tft, uint8_t x, uint8_t y);
+void write_message(const char *msg, TFT_eSPI *tft, uint8_t x, uint8_t y, int font_size=2);
 void keypad_status(const char *msg, TFT_eSPI *tft);
 
 void drawRegMenu(TFT_eSPI *tft, MenuRegData *md);

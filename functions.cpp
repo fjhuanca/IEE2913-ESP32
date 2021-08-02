@@ -77,10 +77,17 @@ void update_keypad(TFT_eSPI *tft, KeyPadData *kpd, uint16_t *t_x, uint16_t *t_y,
             if (n<2 || (n==2 && n2<=4)){
               kpd->numberBuffer[*(kpd->numberIndex)] = kpd->keyLabel[b][0];
               *(kpd->numberIndex) = *(kpd->numberIndex) + 1;
+              kpd->numberBuffer[*(kpd->numberIndex)] = ':';
+              *(kpd->numberIndex) = *(kpd->numberIndex) + 1;
               kpd->numberBuffer[*(kpd->numberIndex)] = 0; // zero terminate
             }
           }
-          else if (*(kpd->numberIndex) > 1){
+          else if ((*(kpd->numberIndex) == 3 && n <= 5)){
+          kpd->numberBuffer[*(kpd->numberIndex)] = kpd->keyLabel[b][0];
+          *(kpd->numberIndex) = *(kpd->numberIndex) + 1;
+          kpd->numberBuffer[*(kpd->numberIndex)] = 0; // zero terminate
+          }
+          else if (*(kpd->numberIndex) > 3){
             kpd->numberBuffer[*(kpd->numberIndex)] = kpd->keyLabel[b][0];
             *(kpd->numberIndex) = *(kpd->numberIndex) + 1;
             kpd->numberBuffer[*(kpd->numberIndex)] = 0; // zero terminate
@@ -92,7 +99,13 @@ void update_keypad(TFT_eSPI *tft, KeyPadData *kpd, uint16_t *t_x, uint16_t *t_y,
      // Del button, so delete last char
      if (b == 1) {
        kpd->numberBuffer[*(kpd->numberIndex)] = 0;
-       if (*(kpd->numberIndex) > 0) {
+       if (*(kpd->numberIndex) == 3) {
+         *(kpd->numberIndex) = *(kpd->numberIndex) - 1;
+         kpd->numberBuffer[*(kpd->numberIndex)] = 0;//' ';
+         *(kpd->numberIndex) = *(kpd->numberIndex) - 1;
+         kpd->numberBuffer[*(kpd->numberIndex)] = 0;//' ';
+       }
+       else if (*(kpd->numberIndex) > 0) {
          *(kpd->numberIndex) = *(kpd->numberIndex) - 1;
          kpd->numberBuffer[*(kpd->numberIndex)] = 0;//' ';
        }
@@ -183,13 +196,13 @@ void update_menu(TFT_eSPI *tft, MenuData *md, uint16_t *t_x, uint16_t *t_y, bool
 }
 
 
-void write_message(const char *msg, TFT_eSPI *tft, uint8_t x, uint8_t y) {
+void write_message(const char *msg, TFT_eSPI *tft, uint8_t x, uint8_t y, int font_size) {
   tft->setTextPadding(340);
   //tft->setCursor(STATUS_X, STATUS_Y);
   tft->setTextColor(TFT_WHITE, TFT_BLACK);
   tft->setTextFont(0);
   tft->setTextDatum(TC_DATUM);
-  tft->setTextSize(2);
+  tft->setTextSize(font_size);
   tft->drawString(msg, x, y);
 }
 
@@ -255,12 +268,6 @@ void update_regmenu(TFT_eSPI *tft, MenuRegData *md, uint16_t *t_x, uint16_t *t_y
 void drawExitMenu(TFT_eSPI *tft, ExitMenuData *md){
   // Draw keypad background
   tft->fillRect(0, 0, 480, 320, TFT_DARKGREY);
-
-  // Draw number display area and frame
-  tft->fillRect(DISP_X, DISP_Y, DISP_W, DISP_H, TFT_BLACK);
-  tft->drawRect(DISP_X, DISP_Y, DISP_W, DISP_H, TFT_WHITE);
-
-
   tft->setFreeFont(LABEL2_FONT);
   uint8_t b = 0;
 
