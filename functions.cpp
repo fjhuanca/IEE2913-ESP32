@@ -10,6 +10,7 @@ void status(const char *msg, TFT_eSPI *tft) {
   tft->setTextDatum(TC_DATUM);
   tft->setTextSize(3);
   tft->drawString(msg, STATUS_X, STATUS_Y);
+  Serial.println(msg);
 }
 
 //------------------------------------------------------------------------------------------
@@ -204,6 +205,7 @@ void write_message(const char *msg, TFT_eSPI *tft, uint8_t x, uint8_t y, int fon
   tft->setTextDatum(TC_DATUM);
   tft->setTextSize(font_size);
   tft->drawString(msg, x, y);
+  Serial.println(msg);
 }
 
 void keypad_status(const char *msg, TFT_eSPI *tft) {
