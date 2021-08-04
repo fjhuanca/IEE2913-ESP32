@@ -26,13 +26,16 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <Wire.h>
-#include "MAX30100_PulseOximeter.h"
+// #include "MAX30100_PulseOximeter.h"
 #include "wav.h"
 #include "driver/i2s.h"
 #include "i2s_handler.h"
 
 #include <WebSocketsClient.h>
 #include <Adafruit_MPU6050.h>
+
+#include "MAX30105.h"
+#include "spo2_algorithm.h"
 
 
 
@@ -339,10 +342,50 @@ void get_temp(void *arg){
 
 
 // -------------------- Oximetria y Pulso ------------------------------------//
-#define REPORTING_PERIOD_MS     1000
-PulseOximeter pox;
-uint32_t tsLastReport = 0;
+MAX30105 particleSensor;
+int spo2 = 0;
+int hr = 0;
+uint32_t irBuffer[100]; //infrared LED sensor data
+uint32_t redBuffer[100];  //red LED sensor data
 
+int32_t bufferLength = 100; //data length
+int32_t spo; //SPO2 value
+int8_t validSPO2; //indicator to show if the SPO2 calculation is valid
+int32_t heartRate; //heart rate value
+int8_t validHeartRate; //indicator to show if the heart rate calculation is valid
+byte ledBrightness = 60; //Options: 0=Off to 255=50mA
+byte sampleAverage = 4; //Options: 1, 2, 4, 8, 16, 32
+byte ledMode = 2; //Options: 1 = Red only, 2 = Red + IR, 3 = Red + IR + Green
+byte sampleRate = 100; //Options: 50, 100, 200, 400, 800, 1000, 1600, 3200
+int pulseWidth = 411; //Options: 69, 118, 215, 411
+int adcRange = 4096; //Options: 2048, 4096, 8192, 16384
+
+void read_max30102(void *arg){
+  bufferLength = 100; //buffer length of 100 stores 4 seconds of samples running at 25sps
+
+  //dumping the first 25 sets of samples in the memory and shift the last 75 sets of samples to the top
+  for (byte i = 25; i < 100; i++)  {
+    redBuffer[i - 25] = redBuffer[i];
+    irBuffer[i - 25] = irBuffer[i];
+  }
+
+  //take 25 sets of samples before calculating the heart rate.
+  for (byte i = 75; i < 100; i++) {
+    while (particleSensor.available() == false) //do we have new data?
+      particleSensor.check(); //Check the sensor for new data
+
+    redBuffer[i] = particleSensor.getRed();
+    irBuffer[i] = particleSensor.getIR();
+    particleSensor.nextSample(); //We're finished with this sample so move to next sample
+
+    if (validHeartRate) hr = heartRate;
+    if (validSPO2) spo2 = spo;
+  }
+
+  //After gathering 25 new samples recalculate HR and SP02
+  maxim_heart_rate_and_oxygen_saturation(irBuffer, bufferLength, redBuffer, &spo, &validSPO2, &heartRate, &validHeartRate);
+  vTaskDelete(NULL);
+}
 
 // -------------------- Camara -----------------------------------------------//
 
@@ -559,14 +602,15 @@ void loop(void) {
       sensors.setWaitForConversion(false);
       long tpox = millis();
       // while (millis() - tpox < 5000 && !pox.begin());
+      particleSensor.begin(Wire, I2C_SPEED_FAST);
+      particleSensor.setup(ledBrightness, sampleAverage, ledMode, sampleRate, pulseWidth, adcRange);
       mpu.begin();
       mpu_gyro = mpu.getGyroSensor();
       tft.fillScreen(TFT_WHITE);
       long last_millis_1 = millis();
       long last_millis_2 = last_millis_1;
       long last_millis_3 = last_millis_1;
-      int spo2 = 0;
-      int hr = 0;
+
       drawExitMenu(&tft, &expd);
 
       write_message("Monitoreando", &tft, STATUS_X, 160, 4);
@@ -583,10 +627,8 @@ void loop(void) {
         
         if (millis() - last_millis_1 >= 1000){
           
-          TaskHandle_t xHandle = NULL;
           xTaskCreate(get_temp, "get_temp", 1024 * 1, NULL, 4, NULL);
-          // spo2 = pox.getSpO2();
-          // hr = pox.getHeartRate();
+          xTaskCreate(read_max30102, "read_max", 1024 * 1, NULL, 4, NULL);
           
           char vital_data[100];
           sprintf(vital_data, "{\"temp\": %f, \"bf\": %d, \"spo\": %d, \"bpm\": %d}", tempC, bf, spo2, hr);
