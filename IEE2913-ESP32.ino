@@ -181,6 +181,7 @@ long int t = 0;
 const int muestras_R = 100;
 int respiros[muestras_R];
 int idx_respiros = 0;
+int bf = -1;
 
 int calculo_freq_respiratoria(){
   total = total - readings[index2];
@@ -334,7 +335,7 @@ bool send_wav(){
 #define ONE_WIRE_BUS 32
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
-float tempC = 0;
+float tempC = -1;
 
 void get_temp(void *arg){
   sensors.requestTemperatures();
@@ -347,8 +348,8 @@ void get_temp(void *arg){
 // -------------------- Oximetria y Pulso ------------------------------------//
 // MAX30100 pox;
 MAX30105 particleSensor;
-int spo2 = 0;
-int hr = 0;
+int spo2 = -1;
+int hr = -1;
 uint32_t irBuffer[100]; //infrared LED sensor data
 uint32_t redBuffer[100];  //red LED sensor data
 
@@ -629,11 +630,12 @@ void loop(void) {
       delay(1000);
       sensors.begin();
       sensors.setWaitForConversion(false);
+      uint8_t temp_isInit = sensors.getDS18Count();
       // long tpox = millis();
       // pox.begin();
-       particleSensor.begin(Wire, I2C_SPEED_FAST);
+      bool max_isInit = particleSensor.begin(Wire, I2C_SPEED_FAST);
        particleSensor.setup(ledBrightness, sampleAverage, ledMode, sampleRate, pulseWidth, adcRange);
-      mpu.begin();
+      bool mpu_isInit = mpu.begin();
       mpu_gyro = mpu.getGyroSensor();
       tft.fillScreen(TFT_WHITE);
       long last_millis_1 = millis();
@@ -649,12 +651,14 @@ void loop(void) {
         update_exitmenu(&tft, &expd, &t_x, &t_y, &pressed);        
         if (!pressed) exit_selection = read_serial();
         // pox.update();
-        sensors_event_t gyro;
-        mpu_gyro->getEvent(&gyro);
-        ax = (gyro.gyro.x*100);
-        int bf = calculo_freq_respiratoria();
-        if (leer_max)
-        {
+        if (mpu_isInit){
+          sensors_event_t gyro;
+          mpu_gyro->getEvent(&gyro);
+          ax = (gyro.gyro.x*100);
+          bf = calculo_freq_respiratoria();
+        }
+        else bf = -1;
+        if (leer_max && max_isInit) {
           read_max30102(NULL);
 //        xTaskCreatePinnedToCore(read_max30102, /* Function to implement the task */
 //                                "read_max", /* Name of the task */
@@ -664,12 +668,17 @@ void loop(void) {
 //                                NULL,  /* Task handle. */
 //                                0); /* Core where the task should run */
         }
+        else {
+          spo2 = -1;
+          hr = -1;
+        }
         // xTaskCreate(read_max30102, "read_max", 1024 * 1, NULL, 4, NULL);
         
         if (millis() - last_millis_1 >= 1000){
           
           //xTaskCreate(get_temp, "get_temp", 1024 * 1, NULL, 4, NULL);
-          get_temp(NULL);
+          if (temp_isInit) get_temp(NULL);
+          else tempC = -1;
           // read_max30102(NULL);
           
           char vital_data[100];
