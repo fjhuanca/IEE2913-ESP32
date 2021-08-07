@@ -34,6 +34,7 @@
 #include <WebSocketsClient.h>
 #include <Adafruit_MPU6050.h>
 
+// #include "MAX30100.h"
 #include "MAX30105.h"
 #include "spo2_algorithm.h"
 
@@ -91,12 +92,12 @@ WebSocketsClient webSocket_ecg;
 WebSocketsClient webSocket_info_in;
 #define TIMEOUT 5000
 #define LED_PIN 25
-int camera_on = false;
 
 bool connected = false;
 bool cn1 = false;
 bool cn2 = false;
 bool cn3 = false;
+int camera_on = false;
 
 String IpAddress2String(const IPAddress& ipAddress){
     return String(ipAddress[0]) + String(".") +
@@ -223,6 +224,7 @@ int calculo_freq_respiratoria(){
     if (respiros[q]) pulsos += 1;
   }
   pulsos2 = pulsos * 3;
+  //ets_printf("Never Used Stack Size: %u\n", uxTaskGetStackHighWaterMark(NULL));
   return pulsos2;
 }
 
@@ -337,11 +339,13 @@ float tempC = 0;
 void get_temp(void *arg){
   sensors.requestTemperatures();
   tempC = (int)(sensors.getTempCByIndex(0) * 10) / 10.0;
-  vTaskDelete(NULL);
+  // ets_printf("Never Used Stack Size temp: %u\n", uxTaskGetStackHighWaterMark(NULL));
+  //vTaskDelete(NULL);
 }
 
 
 // -------------------- Oximetria y Pulso ------------------------------------//
+// MAX30100 pox;
 MAX30105 particleSensor;
 int spo2 = 0;
 int hr = 0;
@@ -354,43 +358,51 @@ int8_t validSPO2; //indicator to show if the SPO2 calculation is valid
 int32_t heartRate; //heart rate value
 int8_t validHeartRate; //indicator to show if the heart rate calculation is valid
 byte ledBrightness = 60; //Options: 0=Off to 255=50mA
-byte sampleAverage = 4; //Options: 1, 2, 4, 8, 16, 32
+byte sampleAverage = 1; //Options: 1, 2, 4, 8, 16, 32
 byte ledMode = 2; //Options: 1 = Red only, 2 = Red + IR, 3 = Red + IR + Green
 byte sampleRate = 100; //Options: 50, 100, 200, 400, 800, 1000, 1600, 3200
 int pulseWidth = 411; //Options: 69, 118, 215, 411
 int adcRange = 4096; //Options: 2048, 4096, 8192, 16384
+byte max_i = 75;
+bool leer_max = true;
 
 void read_max30102(void *arg){
+  leer_max = false;
   bufferLength = 100; //buffer length of 100 stores 4 seconds of samples running at 25sps
-
   //dumping the first 25 sets of samples in the memory and shift the last 75 sets of samples to the top
-  for (byte i = 25; i < 100; i++)  {
-    redBuffer[i - 25] = redBuffer[i];
-    irBuffer[i - 25] = irBuffer[i];
-  }
-
-  //take 25 sets of samples before calculating the heart rate.
-  for (byte i = 75; i < 100; i++) {
-    while (particleSensor.available() == false) //do we have new data?
-      particleSensor.check(); //Check the sensor for new data
-
-    redBuffer[i] = particleSensor.getRed();
-    irBuffer[i] = particleSensor.getIR();
-    particleSensor.nextSample(); //We're finished with this sample so move to next sample
-
+  if (max_i == 100){
+    maxim_heart_rate_and_oxygen_saturation(irBuffer, bufferLength, redBuffer, &spo, &validSPO2, &heartRate, &validHeartRate);
     if (validHeartRate) hr = heartRate;
     if (validSPO2) spo2 = spo;
+    for (byte i = 25; i < 100; i++)  {
+      redBuffer[i - 25] = redBuffer[i];
+      irBuffer[i - 25] = irBuffer[i];
+    }
+    max_i = 75;
+    //After gathering 25 new samples recalculate HR and SP02
   }
-
-  //After gathering 25 new samples recalculate HR and SP02
-  maxim_heart_rate_and_oxygen_saturation(irBuffer, bufferLength, redBuffer, &spo, &validSPO2, &heartRate, &validHeartRate);
-  vTaskDelete(NULL);
+  //max_i += 1;
+  //take 25 sets of samples before calculating the heart rate.
+   if (particleSensor.available()){
+     redBuffer[max_i] = particleSensor.getRed();
+     irBuffer[max_i] = particleSensor.getIR();
+     particleSensor.nextSample(); //We're finished with this sample so move to next sample
+     max_i += 1;
+     Serial.println(max_i);
+   }
+   else particleSensor.check(); //Check the sensor for new data
+  //ets_printf("Never Used Stack Size max30102: %u\n", uxTaskGetStackHighWaterMark(NULL));
+  leer_max = true;
+  //vTaskDelete(NULL);
 }
 
 // -------------------- Camara -----------------------------------------------//
 
 unsigned char bmpHeader[BMP::headerSize];
 unsigned char frame[frameSize];
+unsigned char start_flag = 0xAA;
+unsigned char end_flag = 0xFF;
+unsigned char ip_flag = 0x11;
 
 I2C<SIOD, SIOC> i2c;
 FifoCamera<I2C<SIOD, SIOC>, RRST, WRST, RCK, WR, D0, D1, D2, D3, D4, D5, D6, D7> camera(i2c);
@@ -416,6 +428,20 @@ void readFrame(){
   camera.readFrame(frame, XRES, YRES, BYTES_PER_PIXEL);
 }
 
+void get_frame(void*){
+  while (camera_on){
+    //Serial.println("HERE!");
+    while(!digitalRead(VSYNC));
+    while(digitalRead(VSYNC));
+    camera.prepareCapture();
+    camera.startCapture();
+    while(!digitalRead(VSYNC));
+    camera.stopCapture();
+    camera.readFrame(frame, XRES, YRES, 2);
+  }
+    vTaskDelete(NULL);
+}
+
 // -------------------- UART ---------------------------------------------//
 // #define RXD2 16
 // #define TXD2 17
@@ -431,6 +457,7 @@ uint8_t read_serial(){
 }
 
 void setup() {
+  BMP::construct16BitHeader(bmpHeader, XRES, YRES);
   pinMode(LED_PIN, OUTPUT);
   MenuData md;
   md.key = menukey;
@@ -540,38 +567,40 @@ void loop(void) {
     WebSocketsClient webSocket_cam;
     webSocket_cam.begin(servername, 8000, url_cam);
     webSocket_cam.setReconnectInterval(5000);
+    i2c.init();
+    camera.init();
+    #ifdef QQVGA
+      camera.QQVGARGB565();
+    #endif
+    #ifdef QQQVGA
+      camera.QQQVGARGB565();
+    #endif
+
+    tft.fillScreen(TFT_WHITE);
+    drawExitMenu(&tft, &expd);
+    camera_on = true;
+    long unsigned int t1 = 0;
+    xTaskCreate(get_frame, "get_camera_frame", 1024 * 1, NULL, 1, NULL);
+    while (exit_selection != 0){     
+      webSocket_info_in.loop();   
+      webSocket_cam.loop();
       
-      // i2c.init();
-      // camera.init();
-      // camera.QQVGARGB565();
-      // cn3 = cam_client.connect("wss://iee2913-g10-project.southcentralus.cloudapp.azure.com/wss/receiver/cam/");
-      // if (cn3){
-      //   status("Camara Conectada", &tft);
-      //   delay(1000);
-      //   selection = -1;
-      //   redraw_menu = true;
-      // }
-      tft.fillScreen(TFT_WHITE);
-      drawExitMenu(&tft, &expd);
-      camera_on = true;
-      while (exit_selection != 0){     
-        webSocket_info_in.loop();   
-        pressed = tft.getTouch(&t_x, &t_y);
-        if (!pressed) exit_selection = read_serial();
-        // digitalWrite(LED_PIN, 1);        
-        update_exitmenu(&tft, &expd, &t_x, &t_y, &pressed);
-        // readFrame();
-        // displayRGB565(frame, XRES, YRES);
-        // char fram2send[BMP::headerSize];
-        // sprintf(fram2send, "%s", frame);
-        // cam_client.send(fram2send);
+      if (millis() - t1 > 250){
+        webSocket_cam.sendBIN(&start_flag, 1);
+        webSocket_cam.sendBIN(bmpHeader, BMP::headerSize);
+        webSocket_cam.sendBIN(frame, XRES * YRES * 2);
+        webSocket_cam.sendBIN(&end_flag, 1);
+        t1 = millis();
       }
-        camera_on = false;
-        menureg_selection = -1;
-        exit_selection = -1;
-        selection = -1;
-        redraw_menu = true;
-        // digitalWrite(LED_PIN, 0);
+      pressed = tft.getTouch(&t_x, &t_y);
+      update_exitmenu(&tft, &expd, &t_x, &t_y, &pressed);
+      if (!pressed) exit_selection = read_serial(); 
+    }
+      camera_on = false;
+      menureg_selection = -1;
+      exit_selection = -1;
+      selection = -1;
+      redraw_menu = true;
   }
 
   else if (selection == 2 && WiFi.status() == WL_CONNECTED){
@@ -600,10 +629,10 @@ void loop(void) {
       delay(1000);
       sensors.begin();
       sensors.setWaitForConversion(false);
-      long tpox = millis();
-      // while (millis() - tpox < 5000 && !pox.begin());
-      particleSensor.begin(Wire, I2C_SPEED_FAST);
-      particleSensor.setup(ledBrightness, sampleAverage, ledMode, sampleRate, pulseWidth, adcRange);
+      // long tpox = millis();
+      // pox.begin();
+       particleSensor.begin(Wire, I2C_SPEED_FAST);
+       particleSensor.setup(ledBrightness, sampleAverage, ledMode, sampleRate, pulseWidth, adcRange);
       mpu.begin();
       mpu_gyro = mpu.getGyroSensor();
       tft.fillScreen(TFT_WHITE);
@@ -617,18 +646,31 @@ void loop(void) {
       while(exit_selection !=0 ){
         webSocket_info_in.loop();
         pressed = tft.getTouch(&t_x, &t_y);
-        update_exitmenu(&tft, &expd, &t_x, &t_y, &pressed);
+        update_exitmenu(&tft, &expd, &t_x, &t_y, &pressed);        
+        if (!pressed) exit_selection = read_serial();
         // pox.update();
         sensors_event_t gyro;
         mpu_gyro->getEvent(&gyro);
         ax = (gyro.gyro.x*100);
         int bf = calculo_freq_respiratoria();
-        
+        if (leer_max)
+        {
+          read_max30102(NULL);
+//        xTaskCreatePinnedToCore(read_max30102, /* Function to implement the task */
+//                                "read_max", /* Name of the task */
+//                                1536,  /* Stack size in words */
+//                                NULL,  /* Task input parameter */
+//                                0,  /* Priority of the task */
+//                                NULL,  /* Task handle. */
+//                                0); /* Core where the task should run */
+        }
+        // xTaskCreate(read_max30102, "read_max", 1024 * 1, NULL, 4, NULL);
         
         if (millis() - last_millis_1 >= 1000){
           
-          xTaskCreate(get_temp, "get_temp", 1024 * 1, NULL, 4, NULL);
-          xTaskCreate(read_max30102, "read_max", 1024 * 1, NULL, 4, NULL);
+          //xTaskCreate(get_temp, "get_temp", 1024 * 1, NULL, 4, NULL);
+          get_temp(NULL);
+          // read_max30102(NULL);
           
           char vital_data[100];
           sprintf(vital_data, "{\"temp\": %f, \"bf\": %d, \"spo\": %d, \"bpm\": %d}", tempC, bf, spo2, hr);
@@ -647,7 +689,7 @@ void loop(void) {
         // }
         if (millis() - last_millis_2 >= 5 ){
           uint16_t ecg_read = analogRead(36);
-          char ecg_data[60];
+          char ecg_data[30];
           sprintf(ecg_data, "{\"value\": %d}", ecg_read);
           webSocket_ecg.sendTXT(ecg_data); 
           last_millis_2 = millis();
